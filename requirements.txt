@@ -1,0 +1,13 @@
+# Lead Finder local app requirements
+#
+# The app itself is a plain Node.js app, but the Páginas Amarelas source
+# uses a small Python scraper based on lxml.
+
+Node.js >= 18
+Python >= 3.10
+lxml
+Windows with PowerShell/cmd available
+
+# Optional but recommended:
+# - If Node is not on PATH, start.bat can use the bundled Codex runtime Node.
+# - A Codex CLI install is only useful if you later activate the optional review step.

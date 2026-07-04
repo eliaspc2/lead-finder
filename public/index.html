@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="pt">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Lead Finder</title>
+    <link rel="stylesheet" href="/styles.css?v=20260704-1" />
+  </head>
+  <body>
+    <main class="page">
+      <section class="hero">
+        <div class="hero-inner">
+          <span class="badge">DIRETÓRIO DE LEADS</span>
+          <h1 class="hero-title">
+            <span class="hero-title-line">Encontre leads por negócio</span>
+            <span class="hero-title-line">e cidade.</span>
+          </h1>
+
+          <form id="leadForm" class="search-panel">
+            <div class="search-grid">
+              <label>
+                O que procurar
+                <input name="leadType" value="talhos" />
+              </label>
+              <label>
+                Onde
+                <input name="geography" value="Portugal" />
+              </label>
+            </div>
+
+            <input name="objective" type="hidden" />
+            <input name="outputName" type="hidden" value="leads.csv" />
+            <input name="columns" type="hidden" value="Nome;Pagina web;Redes sociais;Email;Telefone;Localidade;Distrito;Fontes consultadas;Observacoes" />
+
+            <div class="actions">
+              <button id="runBtn" type="submit">Pesquisar</button>
+              <button id="clearBtn" type="button" class="ghost">Limpar</button>
+            </div>
+          </form>
+        </div>
+      </section>
+
+      <section class="results">
+        <div class="results-head">
+          <h2>Atividade</h2>
+          <div class="results-meta">
+            <div class="state-actions">
+              <div class="state-line" id="runState">Em espera</div>
+              <button id="downloadCurrentBtn" type="button" class="ghost compact" disabled>Descarregar CSV atual</button>
+            </div>
+            <p id="statusLine">Pipeline pronta</p>
+            <p id="validationLine" class="validation-line">A validação por IA ainda não começou</p>
+          </div>
+        </div>
+
+        <details class="card activity-window" id="activityWindow">
+          <summary class="activity-summary">
+            <span class="card-pill">Janela de atividade</span>
+            <span class="activity-summary-text" id="activitySummaryText">Aguardando execução</span>
+          </summary>
+          <div class="activity-body">
+            <div class="activity-panel">
+              <div class="activity-panel-head">O que está a acontecer</div>
+              <ul id="activityFeed"></ul>
+            </div>
+            <details class="llm-details">
+              <summary class="llm-summary">Ver a saída da LLM</summary>
+              <pre id="logBox"></pre>
+            </details>
+          </div>
+        </details>
+      </section>
+    </main>
+
+    <script src="/app.js?v=20260704-1"></script>
+  </body>
+  </html>
