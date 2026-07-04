@@ -22,7 +22,8 @@
 html,
 body {
   height: 100%;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 body {
@@ -36,7 +37,8 @@ body {
 
 .page {
   width: min(1440px, calc(100vw - 56px));
-  height: calc(100vh - 60px);
+  min-height: calc(100vh - 60px);
+  height: auto;
   margin: 28px auto 32px;
   display: flex;
   flex-direction: column;

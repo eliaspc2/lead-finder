@@ -241,6 +241,9 @@ function buildPrompt(data, runDir, profile) {
   const outputName = String(data.outputName || DEFAULT_OUTPUT_NAME).trim();
   const strictGeography = geography.toLowerCase() !== "portugal";
   const geographyLabel = strictGeography ? geography : "todo o país";
+  const portugalWideNote = strictGeography
+    ? null
+    : "- Como a geografia é Portugal, expande por distritos, regiões e cidades principais para aumentar a cobertura nacional.";
 
   return [
     "Tu és o Codex. Esta instância trabalha de forma autonoma num projeto local em que tens de procurar leads da seguinte forma:",
@@ -277,6 +280,7 @@ function buildPrompt(data, runDir, profile) {
     "- Se uma via não estiver a produzir contactos úteis depois de poucas tentativas, muda de fonte.",
     "- Não repitas as mesmas pesquisas só para confirmar mais uma vez.",
     "- Prefere terminar com menos leads boas a demorar demasiado com validação repetida.",
+    portugalWideNote,
     "",
     `Nesta execução, concentra-te em: ${profile.focus}.`,
     profile.instructions,
@@ -644,12 +648,12 @@ function parseLeadReviewPayload(text) {
   }
 }
 
-function runLeadReviewAi(row, leadType, geography, context = {}) {
+async function runLeadReviewAi(row, leadType, geography, context = {}) {
   if (!DEFAULT_FINAL_REVIEW_COMMAND || !fs.existsSync(DEFAULT_FINAL_REVIEW_COMMAND)) {
     return { approved: true, reason: "Validador AI indisponível; validação local aplicada." };
   }
   const prompt = buildLeadReviewPrompt(row, leadType, geography, context);
-  const result = spawnSync(
+  const result = await spawnAsync(
     DEFAULT_FINAL_REVIEW_COMMAND,
     ["exec", "--skip-git-repo-check", "--json", "--model", DEFAULT_FINAL_REVIEW_MODEL],
     {
@@ -683,7 +687,7 @@ function runLeadReviewAi(row, leadType, geography, context = {}) {
   };
 }
 
-function validateLeadCandidate(row, leadType, geography, context = {}) {
+async function validateLeadCandidate(row, leadType, geography, context = {}) {
   const localRow = { ...row };
   const name = String(localRow.Nome || "").trim();
   let email = String(localRow.Email || "").trim();
@@ -715,7 +719,7 @@ function validateLeadCandidate(row, leadType, geography, context = {}) {
     return { approved: false, reason: "Resultado de portal/motor de busca, não é uma lead." };
   }
 
-  const ai = runLeadReviewAi(localRow, leadType, geography, context);
+  const ai = await runLeadReviewAi(localRow, leadType, geography, context);
   if (!ai.approved) {
     return { approved: false, reason: ai.reason || "Rejeitada pela validação.", aiOutput: ai.aiOutput, issues: ai.issues || [] };
   }
@@ -768,7 +772,7 @@ function mergeRow(target, incoming) {
   }
 }
 
-function mergeCsvFiles(inputFiles, outputFile, columns, leadType, limit = null, geography = "", validationCache = new Map()) {
+async function mergeCsvFiles(inputFiles, outputFile, columns, leadType, limit = null, geography = "", validationCache = new Map()) {
   const headers = String(columns || DEFAULT_COLUMNS)
     .split(";")
     .map((part) => part.trim())
@@ -833,7 +837,7 @@ function mergeCsvFiles(inputFiles, outputFile, columns, leadType, limit = null, 
       const cacheKey = `${rowMergeKey(normalized)}|${normalizeText(leadType)}|${normalizeFoldedText(geography)}`;
       let validation = validationCache.get(cacheKey);
       if (!validation) {
-        validation = validateLeadCandidate(normalized, leadType, geography, { sourceFile: file });
+        validation = await validateLeadCandidate(normalized, leadType, geography, { sourceFile: file });
         validationCache.set(cacheKey, validation);
       }
       if (!validation.approved) {
@@ -892,7 +896,7 @@ function outputFilesSignature(files) {
     .join("|");
 }
 
-function aggregateRunOutputs(run) {
+async function aggregateRunOutputs(run) {
   const outputFiles = collectProfileOutputFiles(run);
   if (!outputFiles.length) {
     run.aggregateStats = {
@@ -913,7 +917,7 @@ function aggregateRunOutputs(run) {
     return run.aggregateStats;
   }
   run.lastAggregateSignature = signature;
-  const stats = mergeCsvFiles(
+  const stats = await mergeCsvFiles(
     outputFiles,
     run.files.outputFile,
     run.request.columns || DEFAULT_COLUMNS,
@@ -957,6 +961,60 @@ async function terminateRunChildren(run, reason) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function spawnAsync(command, args, options = {}) {
+  return new Promise((resolve) => {
+    let settled = false;
+    const child = spawn(command, args, options);
+    let stdout = "";
+    let stderr = "";
+    const hasInput = Object.prototype.hasOwnProperty.call(options, "input");
+    const input = hasInput ? String(options.input ?? "") : "";
+    const timeoutMs = Number(options.timeout || 0);
+    const timer =
+      timeoutMs > 0
+        ? setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            try {
+              child.kill();
+            } catch {
+              // ignore
+            }
+            resolve({
+              code: null,
+              stdout,
+              stderr: `${stderr}\nTimed out after ${timeoutMs}ms`.trim(),
+              timedOut: true,
+            });
+          }, timeoutMs)
+        : null;
+
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    if (hasInput) {
+      if (child.stdin) {
+        child.stdin.end(input);
+      }
+    }
+    child.on("error", (error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve({ code: null, stdout, stderr: `${stderr}\n${error.message}`.trim(), error });
+    });
+    child.on("close", (code) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      resolve({ code, stdout, stderr, timedOut: false });
+    });
+  });
 }
 
 async function launchSourceRun(run, profile, request, dir) {
@@ -1136,7 +1194,7 @@ function startPipelineRun(run) {
 
     let lastProgress = -1;
     while (!settled.every(Boolean)) {
-      const stats = aggregateRunOutputs(run);
+      const stats = await aggregateRunOutputs(run);
       const validationState = `${stats.kept}:${stats.rejectedByValidation || 0}:${stats.validationErrors || 0}`;
       if (validationState !== lastProgress) {
         lastProgress = validationState;
@@ -1160,7 +1218,7 @@ function startPipelineRun(run) {
       return;
     }
 
-    const mergeStats = mergeCsvFiles(
+    const mergeStats = await mergeCsvFiles(
       successfulOutputs,
       outputFile,
       request.columns || DEFAULT_COLUMNS,

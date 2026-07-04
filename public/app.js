@@ -90,6 +90,10 @@ function setCurrentCsvDownload(latest) {
   downloadCurrentBtn.disabled = false;
 }
 
+function syncActivityScroll() {
+  document.body.classList.toggle("activity-scroll", Boolean(activityWindow?.open));
+}
+
 function formatLeadCount(latest) {
   const status = String(latest?.status || "").toLowerCase();
   const stats = latest?.aggregateStats || {};
@@ -197,6 +201,7 @@ clearBtn.addEventListener("click", () => {
   activityFeed.innerHTML = "<li>Aguardando execução</li>";
   logBox.textContent = "";
   activityWindow.open = false;
+  syncActivityScroll();
   setCurrentCsvDownload(null);
   if (validationLine) validationLine.textContent = "A validação por IA ainda não começou";
 });
@@ -205,11 +210,14 @@ downloadCurrentBtn?.addEventListener("click", () => {
   if (!currentCsvDownload) return;
   downloadFile(currentCsvDownload.url, currentCsvDownload.filename);
 });
+
+activityWindow?.addEventListener("toggle", syncActivityScroll);
 const saved = localStorage.getItem(STORAGE_KEY);
 if (saved) {
   const savedValues = JSON.parse(saved);
   writeForm(savedValues);
 }
 
+syncActivityScroll();
 refreshStatus();
 setInterval(refreshStatus, 2500);

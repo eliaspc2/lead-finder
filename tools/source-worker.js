@@ -31,6 +31,28 @@ const PROVIDER_COOLDOWN_MS = {
   duckduckgo: 60 * 1000,
   yahoo: 60 * 1000,
 };
+const PORTUGAL_GEOGRAPHY_HINTS = [
+  "Lisboa",
+  "Porto",
+  "Braga",
+  "Aveiro",
+  "Coimbra",
+  "Faro",
+  "Setúbal",
+  "Viseu",
+  "Leiria",
+  "Bragança",
+  "Vila Real",
+  "Guarda",
+  "Castelo Branco",
+  "Évora",
+  "Portalegre",
+  "Santarém",
+  "Beja",
+  "Viana do Castelo",
+  "Madeira",
+  "Açores",
+];
 
 function nowStamp() {
   return new Date().toLocaleTimeString("pt-PT", {
@@ -128,16 +150,46 @@ function keywordVariants(leadType) {
   return splitWords(leadType).length ? [leadType] : ["leads"];
 }
 
+function isPortugalWideGeography(geography) {
+  const normalized = normalizeFoldedText(geography);
+  return normalized === "portugal" || normalized === "portugal continental" || normalized === "pt" || normalized === "pt-pt";
+}
+
+function geographyTermsForSource(geography) {
+  const text = String(geography || "").trim();
+  if (!text) return [""];
+  if (!isPortugalWideGeography(text)) return [text];
+  if (SOURCE_TYPE === "directories" || SOURCE_TYPE === "free") {
+    return [text, ...PORTUGAL_GEOGRAPHY_HINTS];
+  }
+  if (SOURCE_TYPE === "maps") {
+    return [text, "Lisboa", "Porto", "Braga", "Coimbra", "Faro", "Setúbal"];
+  }
+  if (SOURCE_TYPE === "social") {
+    return [text, "Lisboa", "Porto", "Braga", "Coimbra"];
+  }
+  return [text, "Lisboa", "Porto", "Braga", "Aveiro", "Coimbra"];
+}
+
 function buildQueries(request) {
   const leadType = request.leadType || request.objective || "leads";
   const geography = String(request.geography || "Portugal").trim();
   const variants = keywordVariants(leadType);
+  const geographyTerms = geographyTermsForSource(geography);
   const queries = [];
 
   for (const variant of variants) {
-    queries.push(`${variant} ${geography}`);
-    queries.push(`${variant} ${geography} telefone email`);
-    queries.push(`${variant} ${geography} website`);
+    if (isPortugalWideGeography(geography) && (SOURCE_TYPE === "directories" || SOURCE_TYPE === "free")) {
+      queries.push(`${variant}`);
+      queries.push(`${variant} telefone email`);
+      queries.push(`${variant} website`);
+    }
+    for (const geo of geographyTerms) {
+      const suffix = geo ? ` ${geo}` : "";
+      queries.push(`${variant}${suffix}`);
+      queries.push(`${variant}${suffix} telefone email`);
+      queries.push(`${variant}${suffix} website`);
+    }
   }
 
   if (SOURCE_TYPE === "social") {
@@ -194,8 +246,14 @@ function directSeedUrls(request) {
     seeds.push(`https://www.agendoor.com/pt/explore/portugal/${citySlug}`);
   }
 
-  if (citySlug && /talh|carn/.test(leadType)) {
-    seeds.push(`https://www.pai.pt/searches?search%5Bquery%5D=talhos&search%5Blocation%5D=${encodeURIComponent(geography)}`);
+  if (/talh|carn/.test(leadType)) {
+    seeds.push(`https://www.pai.pt/searches?search%5Bquery%5D=talhos&search%5Blocation%5D=${encodeURIComponent(geography || "Portugal")}`);
+    seeds.push(`https://www.pai.pt/searches?search%5Bquery%5D=talho&search%5Blocation%5D=${encodeURIComponent(geography || "Portugal")}`);
+    if (isPortugalWideGeography(geography)) {
+      for (const district of PORTUGAL_GEOGRAPHY_HINTS) {
+        seeds.push(`https://www.pai.pt/searches?search%5Bquery%5D=talhos&search%5Blocation%5D=${encodeURIComponent(district)}`);
+      }
+    }
   }
 
   return uniqueUrls(seeds);
