@@ -76,6 +76,8 @@ function computeAggregatePollMs() {
   return 1000;
 }
 
+const VALIDATION_BATCH_MS = Number(process.env.LEAD_VALIDATION_BATCH_MS || 120000);
+
 function safeJsonParse(text, fallback = {}) {
   try {
     return JSON.parse(text);
@@ -772,12 +774,25 @@ function mergeRow(target, incoming) {
   }
 }
 
-async function mergeCsvFiles(inputFiles, outputFile, columns, leadType, limit = null, geography = "", validationCache = new Map()) {
+async function mergeCsvFiles(
+  inputFiles,
+  outputFile,
+  columns,
+  leadType,
+  limit = null,
+  geography = "",
+  validationCache = new Map(),
+  options = {},
+) {
   const headers = String(columns || DEFAULT_COLUMNS)
     .split(";")
     .map((part) => part.trim())
     .filter(Boolean);
-  const merged = new Map();
+  const forceValidation = Boolean(options.forceValidation);
+  const batchMs = Number(options.batchMs || VALIDATION_BATCH_MS);
+  const lastValidationBatchAt = Number(options.lastValidationBatchAt || 0);
+  const shouldRunValidation = forceValidation || Date.now() - lastValidationBatchAt >= batchMs;
+  const candidateRows = [];
   const stats = {
     kept: 0,
     duplicates: 0,
@@ -788,6 +803,7 @@ async function mergeCsvFiles(inputFiles, outputFile, columns, leadType, limit = 
     rejectedByValidation: 0,
     validationErrors: 0,
   };
+  const validationConcurrency = Math.max(2, Number(process.env.LEAD_VALIDATION_CONCURRENCY || 4));
 
   for (const file of inputFiles) {
     if (!fs.existsSync(file)) continue;
@@ -835,31 +851,54 @@ async function mergeCsvFiles(inputFiles, outputFile, columns, leadType, limit = 
         continue;
       }
       const cacheKey = `${rowMergeKey(normalized)}|${normalizeText(leadType)}|${normalizeFoldedText(geography)}`;
-      let validation = validationCache.get(cacheKey);
-      if (!validation) {
-        validation = await validateLeadCandidate(normalized, leadType, geography, { sourceFile: file });
-        validationCache.set(cacheKey, validation);
-      }
-      if (!validation.approved) {
-        stats.rejectedByValidation += 1;
-        continue;
-      }
-      if (validation.row) {
-        for (const header of headers) {
-          if (Object.prototype.hasOwnProperty.call(validation.row, header)) {
-            normalized[header] = String(validation.row[header] || "").trim();
-          }
+      candidateRows.push({
+        cacheKey,
+        file,
+        normalized,
+      });
+    }
+  }
+
+  const pendingRows = shouldRunValidation ? candidateRows.filter((item) => !validationCache.has(item.cacheKey)) : [];
+  if (pendingRows.length) {
+    const validations = await mapWithConcurrency(pendingRows, validationConcurrency, async (item) =>
+      validateLeadCandidate(item.normalized, leadType, geography, { sourceFile: item.file }),
+    );
+    for (let index = 0; index < pendingRows.length; index += 1) {
+      validationCache.set(pendingRows[index].cacheKey, validations[index]);
+    }
+    if (options.runState) {
+      options.runState.lastValidationBatchAt = Date.now();
+    }
+  }
+
+  const merged = new Map();
+  for (const item of candidateRows) {
+    const validation = validationCache.get(item.cacheKey);
+    if (!validation) {
+      stats.validationErrors += 1;
+      continue;
+    }
+    if (!validation.approved) {
+      stats.rejectedByValidation += 1;
+      continue;
+    }
+    const normalized = { ...item.normalized };
+    if (validation.row) {
+      for (const header of headers) {
+        if (Object.prototype.hasOwnProperty.call(validation.row, header)) {
+          normalized[header] = String(validation.row[header] || "").trim();
         }
-        normalized.Observacoes = [normalized.Observacoes, validation.reason].filter(Boolean).join(" | ");
       }
-      const key = rowMergeKey(normalized);
-      if (!key) continue;
-      if (!merged.has(key)) {
-        merged.set(key, normalized);
-      } else {
-        stats.duplicates += 1;
-        mergeRow(merged.get(key), normalized);
-      }
+      normalized.Observacoes = [normalized.Observacoes, validation.reason].filter(Boolean).join(" | ");
+    }
+    const key = rowMergeKey(normalized);
+    if (!key) continue;
+    if (!merged.has(key)) {
+      merged.set(key, normalized);
+    } else {
+      stats.duplicates += 1;
+      mergeRow(merged.get(key), normalized);
     }
   }
 
@@ -925,6 +964,7 @@ async function aggregateRunOutputs(run) {
     null,
     run.request.geography,
     run.validationCache || (run.validationCache = new Map()),
+    { batchMs: VALIDATION_BATCH_MS, lastValidationBatchAt: run.lastValidationBatchAt || 0, runState: run },
   );
   run.aggregateStats = stats;
   if (stats.kept > 0) run.result = run.files.outputFile;
@@ -961,6 +1001,24 @@ async function terminateRunChildren(run, reason) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+async function mapWithConcurrency(items, concurrency, worker) {
+  const limit = Math.max(1, Number(concurrency) || 1);
+  const results = new Array(items.length);
+  let nextIndex = 0;
+
+  async function runNext() {
+    while (nextIndex < items.length) {
+      const currentIndex = nextIndex;
+      nextIndex += 1;
+      results[currentIndex] = await worker(items[currentIndex], currentIndex);
+    }
+  }
+
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => runNext());
+  await Promise.all(workers);
+  return results;
 }
 
 function spawnAsync(command, args, options = {}) {
@@ -1226,6 +1284,7 @@ function startPipelineRun(run) {
       null,
       request.geography,
       run.validationCache || (run.validationCache = new Map()),
+      { batchMs: VALIDATION_BATCH_MS, lastValidationBatchAt: run.lastValidationBatchAt || 0, forceValidation: true, runState: run },
     );
     run.aggregateStats = mergeStats;
     run.result = outputFile;
