@@ -801,6 +801,7 @@ async function mergeCsvFiles(
     skippedWrongType: 0,
     clearedGenericWebsite: 0,
     rejectedByValidation: 0,
+    pendingValidation: 0,
     validationErrors: 0,
   };
   const validationConcurrency = Math.max(2, Number(process.env.LEAD_VALIDATION_CONCURRENCY || 4));
@@ -876,7 +877,11 @@ async function mergeCsvFiles(
   for (const item of candidateRows) {
     const validation = validationCache.get(item.cacheKey);
     if (!validation) {
-      stats.validationErrors += 1;
+      if (shouldRunValidation) {
+        stats.validationErrors += 1;
+      } else {
+        stats.pendingValidation += 1;
+      }
       continue;
     }
     if (!validation.approved) {
@@ -937,6 +942,7 @@ function outputFilesSignature(files) {
 
 async function aggregateRunOutputs(run) {
   const outputFiles = collectProfileOutputFiles(run);
+  const validationStamp = Number(run.lastValidationBatchAt || 0);
   if (!outputFiles.length) {
     run.aggregateStats = {
       kept: 0,
@@ -947,11 +953,12 @@ async function aggregateRunOutputs(run) {
       skippedWrongType: 0,
       clearedGenericWebsite: 0,
       rejectedByValidation: 0,
+      pendingValidation: 0,
       validationErrors: 0,
     };
     return run.aggregateStats;
   }
-  const signature = outputFilesSignature(outputFiles);
+  const signature = `${outputFilesSignature(outputFiles)}|v:${validationStamp}`;
   if (run.lastAggregateSignature === signature && run.aggregateStats) {
     return run.aggregateStats;
   }
@@ -1253,14 +1260,14 @@ function startPipelineRun(run) {
     let lastProgress = -1;
     while (!settled.every(Boolean)) {
       const stats = await aggregateRunOutputs(run);
-      const validationState = `${stats.kept}:${stats.rejectedByValidation || 0}:${stats.validationErrors || 0}`;
-      if (validationState !== lastProgress) {
-        lastProgress = validationState;
-        pushEvent(
-          run,
-          `Agregado actualizado: ${stats.kept} leads válidas, ${stats.rejectedByValidation || 0} resultados descartados por IA`,
-        );
-      }
+      const validationState = `${stats.kept}:${stats.rejectedByValidation || 0}:${stats.pendingValidation || 0}:${stats.validationErrors || 0}`;
+    if (validationState !== lastProgress) {
+      lastProgress = validationState;
+      pushEvent(
+        run,
+        `Agregado actualizado: ${stats.kept} leads válidas, ${stats.rejectedByValidation || 0} descartados por IA, ${stats.pendingValidation || 0} pendentes para validação`,
+      );
+    }
       await sleep(aggregatePollMs);
     }
 
@@ -1293,7 +1300,7 @@ function startPipelineRun(run) {
       run.status = "completed";
       pushEvent(
         run,
-        `CSV final: ${mergeStats.kept} leads, ${mergeStats.duplicates} duplicados fundidos, ${mergeStats.skippedWrongType} fora da categoria removidos, ${mergeStats.rejectedByValidation || 0} descartados por IA`,
+        `CSV final: ${mergeStats.kept} leads, ${mergeStats.duplicates} duplicados fundidos, ${mergeStats.skippedWrongType} fora da categoria removidos, ${mergeStats.rejectedByValidation || 0} descartados por IA, ${mergeStats.pendingValidation || 0} pendentes`,
       );
       if (results.some((result) => result.status !== "fulfilled" || result.value.status !== "completed")) {
         run.warning = "Nem todas as fontes concluíram com sucesso, mas o CSV final foi gerado.";

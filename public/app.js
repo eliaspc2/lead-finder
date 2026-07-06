@@ -106,12 +106,13 @@ function formatLeadCount(latest) {
 function formatValidationCount(latest) {
   const stats = latest?.aggregateStats || {};
   const rejected = Number(stats.rejectedByValidation || 0);
+  const pending = Number(stats.pendingValidation || 0);
   const validationErrors = Number(stats.validationErrors || 0);
-  if (!rejected && !validationErrors) return "A validação por IA ainda não descartou resultados";
+  if (!rejected && !pending && !validationErrors) return "A validação por IA ainda não descartou resultados";
   if (validationErrors) {
-    return `IA descartou ${rejected} resultados e registou ${validationErrors} erros de validação`;
+    return `IA descartou ${rejected} resultados, ${pending} pendentes e registou ${validationErrors} erros de validação`;
   }
-  return `IA descartou ${rejected} resultados`;
+  return `IA descartou ${rejected} resultados e deixou ${pending} pendentes`;
 }
 
 async function refreshStatus() {
